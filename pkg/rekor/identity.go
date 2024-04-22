@@ -121,20 +121,18 @@ func MatchedIndices(logEntries []models.LogEntry, mvs MonitoredValues) ([]Identi
 				return nil, fmt.Errorf("error extracting identities for UUID %s at index %d: %w", uuid, *entry.LogIndex, err)
 			}
 
-			monitoredFpSet := make(map[IdentityEntry]struct{})
 			for _, monitoredFp := range mvs.Fingerprints {
 				for _, fp := range fps {
 					if fp == monitoredFp {
-						monitoredFpSet[IdentityEntry{
+						matchedEntries = append(matchedEntries, IdentityEntry{
 							Fingerprint: fp,
 							Index:       *entry.LogIndex,
 							UUID:        uuid,
-						}] = struct{}{}
+						})
 					}
 				}
 			}
 
-			monitoredSubSet := make(map[IdentityEntry]struct{})
 			for _, monitoredSub := range mvs.Subjects {
 				regex, err := regexp.Compile(monitoredSub)
 				if err != nil {
@@ -142,16 +140,15 @@ func MatchedIndices(logEntries []models.LogEntry, mvs MonitoredValues) ([]Identi
 				}
 				for _, sub := range subjects {
 					if regex.MatchString(sub) {
-						monitoredSubSet[IdentityEntry{
+						matchedEntries = append(matchedEntries, IdentityEntry{
 							Subject: sub,
 							Index:   *entry.LogIndex,
 							UUID:    uuid,
-						}] = struct{}{}
+						})
 					}
 				}
 			}
 
-			monitoredCertIDSet := make(map[IdentityEntry]struct{})
 			oidConstraintSet := make(map[IdentityEntry]struct{})
 			for _, cert := range certs {
 				for _, monitoredCertID := range mvs.CertificateIdentities {
@@ -159,12 +156,12 @@ func MatchedIndices(logEntries []models.LogEntry, mvs MonitoredValues) ([]Identi
 					if certIDErr != nil {
 						return nil, fmt.Errorf("error with policy matching for UUID %s at index %d: %w", uuid, *entry.LogIndex, certIDErr)
 					} else if certIDMatch {
-						monitoredCertIDSet[IdentityEntry{
+						matchedEntries = append(matchedEntries, IdentityEntry{
 							CertSubject: certIDSub,
 							Issuer:      certIDIss,
 							Index:       *entry.LogIndex,
 							UUID:        uuid,
-						}] = struct{}{}
+						})
 					}
 				}
 
@@ -174,7 +171,6 @@ func MatchedIndices(logEntries []models.LogEntry, mvs MonitoredValues) ([]Identi
 						return nil, fmt.Errorf("error with policy matching for UUID %s at index %d: %w", uuid, *entry.LogIndex, oidErr)
 					} else if oidMatch {
 						oidConstraintSet[IdentityEntry{
-							// TODO: What else should I put here...
 							Index: *entry.LogIndex,
 							UUID:  uuid,
 						}] = struct{}{}
@@ -182,10 +178,9 @@ func MatchedIndices(logEntries []models.LogEntry, mvs MonitoredValues) ([]Identi
 				}
 			}
 
-			// Find intersection of all sets and add to array
-			intersect := intersection(monitoredFpSet, intersection(monitoredSubSet, intersection(monitoredCertIDSet, oidConstraintSet)))
-			for key := range intersect {
-				matchedEntries = append(matchedEntries, key)
+			// If any oidConstraints were set, ensure only matched entries that meet all the constraints are returned
+			if len(oidConstraintSet) != 0 {
+				matchedEntries = FilterEntries(matchedEntries, oidConstraintSet)
 			}
 		}
 	}
@@ -378,15 +373,14 @@ func compareValue(value []byte, target []byte) bool {
 	return true
 }
 
-// takes in two sets and finds the intserction
-func intersection(set1, set2 map[IdentityEntry]struct{}) map[IdentityEntry]struct{} {
-	result := make(map[IdentityEntry]struct{})
-
-	for key := range set1 {
-		if _, ok := set2[key]; ok {
-			result[key] = struct{}{}
+// FilterEntries removes entries from matchedEntries that are not present in filterSet
+func FilterEntries(matchedEntries []IdentityEntry, filterSet map[IdentityEntry]struct{}) []IdentityEntry {
+	// Iterate through matchedEntries and keep only the ones present in filterSet
+	result := make([]IdentityEntry, 0)
+	for _, entry := range matchedEntries {
+		if _, ok := filterSet[entry]; ok {
+			result = append(result, entry)
 		}
 	}
-
 	return result
 }
